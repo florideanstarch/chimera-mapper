@@ -1,7 +1,9 @@
 use crate::action::{Action, Key, Modifier, MouseButton};
 use crate::config::AppResult;
 use crate::hid::Transition;
-use core_graphics::event::{CGEvent, CGEventTapLocation, CGEventType, CGMouseButton, EventField};
+use core_graphics::event::{
+    CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGMouseButton, EventField,
+};
 use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
 pub struct Emitter {
@@ -13,15 +15,6 @@ pub struct SourceGrab;
 impl SourceGrab {
     pub fn acquire(_vid: Option<u16>, _pid: Option<u16>) -> AppResult<Option<Self>> {
         Ok(None)
-    }
-}
-
-variant_map! {
-    fn modifier_to_mac(Modifier) -> u16 {
-        Ctrl  => 59,  // kVK_Control
-        Shift => 56,  // kVK_Shift
-        Alt   => 58,  // kVK_Option
-        Meta  => 55,  // kVK_Command
     }
 }
 
@@ -54,6 +47,17 @@ variant_map! {
         Right     => 124,
         Up        => 126,
         Down      => 125,
+        LeftBracket  => 33,
+        RightBracket => 30,
+    }
+}
+
+fn modifier_to_flag(m: Modifier) -> CGEventFlags {
+    match m {
+        Modifier::Ctrl => CGEventFlags::CGEventFlagControl,
+        Modifier::Shift => CGEventFlags::CGEventFlagShift,
+        Modifier::Alt => CGEventFlags::CGEventFlagAlternate,
+        Modifier::Meta => CGEventFlags::CGEventFlagCommand,
     }
 }
 
@@ -69,33 +73,16 @@ impl Emitter {
         match &transition.action {
             Action::Keys { modifiers, key } => {
                 let keycode = key_to_mac(*key);
-                if pressed {
-                    for &m in modifiers {
-                        let ev = CGEvent::new_keyboard_event(
-                            self.source.clone(),
-                            modifier_to_mac(m),
-                            true,
-                        )
-                        .map_err(|_| "failed to create macOS keyboard event")?;
-                        ev.post(CGEventTapLocation::HID);
-                    }
-                    let ev = CGEvent::new_keyboard_event(self.source.clone(), keycode, true)
-                        .map_err(|_| "failed to create macOS keyboard event")?;
-                    ev.post(CGEventTapLocation::HID);
-                } else {
-                    let ev = CGEvent::new_keyboard_event(self.source.clone(), keycode, false)
-                        .map_err(|_| "failed to create macOS keyboard event")?;
-                    ev.post(CGEventTapLocation::HID);
-                    for &m in modifiers.iter().rev() {
-                        let ev = CGEvent::new_keyboard_event(
-                            self.source.clone(),
-                            modifier_to_mac(m),
-                            false,
-                        )
-                        .map_err(|_| "failed to create macOS keyboard event")?;
-                        ev.post(CGEventTapLocation::HID);
-                    }
+                let mut flags = CGEventFlags::empty();
+                for &m in modifiers {
+                    flags |= modifier_to_flag(m);
                 }
+                let ev = CGEvent::new_keyboard_event(self.source.clone(), keycode, pressed)
+                    .map_err(|_| "failed to create macOS keyboard event")?;
+                if !flags.is_empty() {
+                    ev.set_flags(flags);
+                }
+                ev.post(CGEventTapLocation::HID);
             }
             Action::Mouse(btn) => {
                 let location = CGEvent::new(self.source.clone())
